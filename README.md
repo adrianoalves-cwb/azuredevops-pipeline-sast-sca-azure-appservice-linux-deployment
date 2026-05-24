@@ -4,7 +4,6 @@
 
 This repository contains Azure DevOps YAML pipelines for building and deploying the application.
 
-<<<<<<< HEAD
 ## Architecture
 
 The delivery architecture is split into CI and CD pipelines. The CI pipeline builds, tests, scans, and publishes artifacts. The CD pipeline consumes those artifacts and deploys them to Azure Web App (Linux) environments for QA and PROD using a shared deployment template.
@@ -33,8 +32,6 @@ Governance is enforced through codified pipeline definitions, branch-driven rele
 4. CD consumes artifacts and deploys to QA or PROD based on branch conditions.
 5. SoundCheck runs post-deployment validation.
 
-=======
->>>>>>> 9de43953284848f5682270eb382487ef19f16c03
 ## Files
 
 - `CI-azure-pipelines.yml`: Continuous Integration pipeline (build, test, code quality/security checks, and soundcheck).
