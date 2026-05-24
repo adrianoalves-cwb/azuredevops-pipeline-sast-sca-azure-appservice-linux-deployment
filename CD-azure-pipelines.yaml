@@ -1,0 +1,169 @@
+# This pipeline deploys to Azure Web App (App Services) hosted on Linux.
+trigger: none
+
+resources:
+  pipelines:
+    - pipeline: 'BuildPipeline'
+      project: 'Sales Order to Invoice'
+      source: '\application\CI-application-api'
+      trigger:
+        branches: 
+          include:
+            - qa
+            - main
+
+  repositories:
+  - repository: templates
+    type: github
+    name: SanitizedGroup-Internal/devsecops-shared-azuredevops
+    ref: main
+    endpoint: Sanitized-Group-Internal
+
+  - repository: devsecops-templates
+    type: git
+    name: Sales Order to Invoice/devsecops-templates
+    ref: main
+
+pool: 
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - name: System.Debug
+    value: true
+    
+  - group: SecurityTools
+
+  - name: sourceBranch
+    value: $(resources.pipeline.BuildPipeline.sourceBranch)
+
+  - name: BACKSTAGE_ENTITY_REF
+    value: "component:default/application-api"
+
+# Select the Keyvault variable based on the branch (main/qa)
+  - ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/main') }}:
+    - group: application-prod
+
+  - ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/qa') }}:
+    - group: application-qa
+    
+# Mapping Keyvault variables to appsettings.json variables
+  - name: AzureAd.Instance
+    value: $(AZURE-AD-INSTANCE)
+  - name: AzureAd.TenantId
+    value: $(AZURE-AD-TENANT-ID)
+  - name: AzureAd.ClientId
+    value: $(AZURE-AD-CLIENT-ID)
+  - name: AzureAd.Audience
+    value: $(AZURE-AD-AUDIENC)
+  - name: Mainframe.BaseUrl
+    value: $(MAINFRAME-BASE-URL)
+
+  - name: EmailGraph.TenantId
+    value: $(AZURE-AD-TENANT-ID)
+  - name: EmailGraph.ClientId
+    value: $(application-INVOICEREQUEST-CLIENTID)
+  - name: EmailGraph.ClientSecret
+    value: $(application-INVOICEREQUEST-SECRET)
+  - name: Email.Remetente
+    value: $(application-INVOICEREQUEST-EMAIL)
+  - name: Email.UrlAplicacao
+    value: $(CORS-ALLOWED-ORIGINS)
+
+  - name: ApplicationInsights.ConnectionString
+    value: $(APPINSIGHTS-CONNECTION-STRING)
+
+  - name: Cors.AllowedOrigins.0
+    value: $(CORS-ALLOWED-ORIGINS)
+
+  - name: ASPNETCORE_ENVIRONMENT
+    ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/qa') }}:
+      value: QA
+    ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/main') }}:
+      value: PROD
+
+stages:
+  - stage: QA
+    lockBehavior: sequential
+    dependsOn: []
+    displayName: 'QA'
+    condition: eq(variables['build.sourceBranch'], 'refs/heads/qa')
+    jobs:      
+      - deployment: DeployQA
+        displayName: 'QA'
+        environment: 'application-qa'
+        condition: always()
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+              - template: templates/deploy-azure-template.yml
+                parameters:
+                  buildPipeline: 'BuildPipeline'
+                  azureSubscription: 'az-application-app-qa'
+                  resourceGroup: 'application-qa-rg'
+                  appName: 'application-api-qa'
+                  aspnetcoreEnvironment: 'QA'
+                  appType: 'webAppLinux'
+                  fileTransform: 'true'
+                  ASPNETCORE_ENVIRONMENT: $(ASPNETCORE_ENVIRONMENT)
+                  MainframeBaseUrl: $(Mainframe.BaseUrl)
+                  MICROSOFT_PROVIDER_AUTHENTICATION_SECRET: $(AZURE-AD-CLIENT-SECRET)
+                  AzureAdTenantId: $(AZURE-AD-TENANT-ID)
+                  AzureAdClientId: $(AZURE-AD-CLIENT-ID)
+                  WEBSITE_AUTH_AAD_ALLOWED_TENANTS: $(AZURE-AD-TENANT-ID)
+                  WEBSITE_ENABLE_SYNC_UPDATE_SITE: $(WEBSITE-ENABLE-SYNC-UPDATE-SITE)
+                  WEBSITE_RUN_FROM_PACKAGE: $(WEBSITE-RUN-FROM-PACKAGE)
+                  WEBSITE_VNET_ROUTE_ALL: $(WEBSITE-VNET-ROUTE-ALL)
+                  EmailGraphTenantId: $(EmailGraph.TenantId)
+                  EmailGraphClientId: $(EmailGraph.ClientId)
+                  EmailGraphClientSecret: $(EmailGraph.ClientSecret)
+                  EmailRemetente: $(Email.Remetente)
+                  EmailUrlAplicacao: $(Email.UrlAplicacao)
+                  AppInsightsConnectionString: $(ApplicationInsights.ConnectionString)
+
+  - stage: PROD
+    lockBehavior: sequential
+    dependsOn: []
+    displayName: 'PROD'
+    condition: eq(variables['build.sourceBranch'], 'refs/heads/main')
+    jobs:      
+      - deployment: DeployPROD
+        displayName: 'PROD'
+        environment: 'application-prod'
+        condition: always()
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+              - template: templates/deploy-azure-template.yml
+                parameters:
+                  buildPipeline: 'BuildPipeline'
+                  azureSubscription: 'az-application-app-prod'
+                  resourceGroup: 'application-prod-rg'
+                  appName: 'application-api-prod'
+                  aspnetcoreEnvironment: 'PROD'
+                  appType: 'webAppLinux'
+                  fileTransform: 'true'
+                  ASPNETCORE_ENVIRONMENT: $(ASPNETCORE_ENVIRONMENT)
+                  MainframeBaseUrl: $(Mainframe.BaseUrl)
+                  MICROSOFT_PROVIDER_AUTHENTICATION_SECRET: $(AZURE-AD-CLIENT-SECRET)
+                  AzureAdTenantId: $(AZURE-AD-TENANT-ID)
+                  AzureAdClientId: $(AZURE-AD-CLIENT-ID)
+                  WEBSITE_AUTH_AAD_ALLOWED_TENANTS: $(AZURE-AD-TENANT-ID)
+                  WEBSITE_ENABLE_SYNC_UPDATE_SITE: $(WEBSITE-ENABLE-SYNC-UPDATE-SITE)
+                  WEBSITE_RUN_FROM_PACKAGE: $(WEBSITE-RUN-FROM-PACKAGE)
+                  WEBSITE_VNET_ROUTE_ALL: $(WEBSITE-VNET-ROUTE-ALL)
+                  EmailGraphTenantId: $(EmailGraph.TenantId)
+                  EmailGraphClientId: $(EmailGraph.ClientId)
+                  EmailGraphClientSecret: $(EmailGraph.ClientSecret)
+                  EmailRemetente: $(Email.Remetente)
+                  EmailUrlAplicacao: $(Email.UrlAplicacao)
+                  AppInsightsConnectionString: $(ApplicationInsights.ConnectionString)
+
+  - stage: SoundCheck 
+    dependsOn: []
+    displayName: SoundCheck Stage
+    jobs:
+      - template: soundcheck/CD-soundcheck-template.yml@devsecops-templates
+        parameters:
+          backstageEntityRef: "$(BACKSTAGE_ENTITY_REF)"

@@ -1,0 +1,150 @@
+trigger:
+  branches:
+    include:
+    - refs/heads/main
+    - refs/heads/qa
+    - refs/heads/feature/**
+
+resources:
+  repositories:
+  - repository: templates
+    type: github
+    name: SanitizedGroup-Internal/devsecops-shared-azuredevops
+    ref: main
+    endpoint: Sanitized-Group-Internal
+
+  - repository: devsecops-templates
+    type: git
+    name: Sales Order to Invoice/devsecops-templates
+    ref: main
+
+variables:
+- group: SecurityTools
+- group: Sonatype
+
+- ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/main') }}:
+    - group: application-prod
+- ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/qa') }}:
+    - group: application-qa
+
+- name: BuildConfiguration
+  value: 'Release'
+
+  # Backstage
+- name: BACKSTAGE_ENTITY_REF
+  value: "component:default/application-api"
+  # Sonarqube
+- name: sonarProjectKey
+  value: 'com.sanitized.vt.dotnet.application-api'
+  # Sonatype
+  
+- name: sonatypeStageVariable
+  ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+    value: source
+  ${{ if eq(variables['Build.SourceBranchName'], 'qa') }}:
+    value: stage-release
+
+stages:
+- stage: Build_Publish
+  displayName: 'Build And Publish'
+
+  pool:
+    vmImage: windows-latest
+
+  jobs:
+  - job:
+    displayName: 'Build'
+    steps:
+      - task: DotNetCoreCLI@2
+        displayName: Restore
+        inputs:
+          command: restore
+          projects: '**/*.sln'
+          vstsFeed: CSLA
+
+      - task: DotNetCoreCLI@2
+        displayName: Test
+        inputs:
+          command: test
+          projects: '**/*.sln'
+          arguments: '--configuration Release --logger "trx" --collect "XPlat Code Coverage" --settings runsettings.xml'
+          vstsFeed: CSLA
+          publishTestResults: true
+
+      - task: PublishCodeCoverageResults@2
+        displayName: Publish Code Coverage
+        inputs:
+          codeCoverageTool: Cobertura
+          summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
+          failIfCoverageEmpty: true
+
+      - task: DotNetCoreCLI@2
+        displayName: Publish API
+        inputs:
+          command: publish
+          publishWebProjects: false
+          projects: 'applicationAPI/*.csproj'
+          arguments: -c $(BuildConfiguration) /p:MicrosoftNETPlatformLibrary=Microsoft.NETCore.App /p:DebugType=None -o $(Build.ArtifactStagingDirectory)/api
+
+      - task: PublishBuildArtifacts@1
+        displayName: 'Publish Artifact: Artifacts'
+        inputs:
+          PathtoPublish: $(Build.ArtifactStagingDirectory)/
+          ArtifactName: drop
+
+- stage: SonarQube
+  dependsOn: [Build_Publish]
+  displayName: 'SonarQube'
+  jobs:
+  - job: SonarQube
+    displayName: SonarQube Scan
+    condition: true
+    continueOnError: true
+    steps:
+      - template: sonarqube/sonarqube-dotnet-template.yml@devsecops-templates
+        parameters:
+          projectKey: "$(sonarProjectKey)"
+          projectFolder: "application-api"
+          projectFeed: CSLA
+          dotnetVersion: "10.x"
+          enableBackstageSoundcheck: true
+          backstageEntityRef: "$(BACKSTAGE_ENTITY_REF)"
+
+- stage: Sonartype
+  dependsOn: [Build_Publish]
+  displayName: 'Sonartype'
+  jobs:
+  - job: Sonartype
+    displayName: Sonartype Scan
+    continueOnError: true
+    steps:
+    - template: templates/security/sca/run.yml@templates
+      parameters:
+        nexusIqService: "ADO-NexusIQ_ServiceConnection"
+        applicationId: "$(sonatypeApplicationId)"
+        scanTargets: "*.sln"
+        stage: "$(sonatypeStageVariable)"
+        enableBackstageSoundcheck: true
+
+- stage: SoundCheck
+  dependsOn: [Build_Publish]
+  displayName: SoundCheck Stage
+  jobs:
+    - template: soundcheck/CI-soundchecks-template.yml@devsecops-templates
+      parameters:
+        adoProjectUrl: "https://dev.azure.com/Fake-Organization/Fake%20Project"
+        enableLvl2: true
+        monitoringServicePrincipalClientId: "$(DEVOPS-ST-INVOICING-SERVICE-CONNECTION-CLIENT-ID)"
+        monitoringServicePrincipalClientSecret: "$(DEVOPS-ST-INVOICING-SERVICE-CONNECTION-CLIENT-SECRET)"
+        backstageEntityRef: "$(BACKSTAGE_ENTITY_REF)"
+        tenantId: "$(AZURE-AD-TENANT-ID)"
+        subscriptionId: "$(AZURE-AD-SUBSCRIPTION-ID)"
+        workspaceId: "$(AZURE-APP-INSIGHTS-WORKSPACE-ID)"
+        workspaceName: "$(AZURE-APP-INSIGHTS-WORKSPACE-NAME)"
+        resourceGroupName: "$(AZURE-RESOURCEGROUP-NAME)"
+        testScriptFile: "load_test_loop_jmeter.jmx"
+        testConcurrency: 10
+        testIterations: 1
+        testRampUp: '1s'
+        enableLvl3: true
+        targetAverageLifespan: 15

@@ -1,0 +1,59 @@
+parameters:
+  buildPipeline: ''
+  artifactName: 'drop'
+  azureSubscription: ''
+  appType: 'Web App on Windows'
+  resourceGroup: ''
+  appName: ''
+  aspnetcoreEnvironment: ''
+  fileTransform: 'false'
+  replaceTokens: 'false'
+
+steps:
+  - checkout: self
+
+  - download: ${{ parameters.buildPipeline }}
+    name: 'DownloadBuildArtifacts'
+    displayName: 'Download Build Artifacts'
+    artifact: ${{  parameters.artifactName }}
+
+  - "${{ if eq(parameters.fileTransform, true) }}":
+    - task: FileTransform@2
+      inputs:
+        folderPath: '$(Agent.BuildDirectory)/**/*.zip'
+        enableXmlTransform: false
+        jsonTargetFiles: '**/appsettings.json'
+
+  - "${{ if eq(parameters.replaceTokens, true) }}":
+    - task: replacetokens@6
+      inputs:
+        sources: 'src/environments/environment.ts'
+
+  - task: AzureCLI@2
+    displayName: 'Azure CLI - Add Firewall Rule'
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: pscore
+      scriptLocation: inlineScript
+      inlineScript: |
+        $publicip = (Invoke-WebRequest -uri "http://ifconfig.me/ip").Content
+        az webapp config access-restriction add -g ${{ parameters.resourceGroup }} -n ${{ parameters.appName }} --rule-name build_server --action Allow --ip-address $publicip/27 --priority 250 --scm-site true
+        Start-Sleep -s 120
+
+  - task: AzureRmWebAppDeployment@4
+    displayName: 'Azure App Service Deploy'
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      appType: ${{ parameters.appType }}
+      WebAppName: ${{ parameters.appName }}
+      AppSettings: "-ASPNETCORE_ENVIRONMENT ${{ parameters.aspnetcoreEnvironment }}"
+      packageForLinux: '$(Pipeline.Workspace)/**/*.zip'
+
+  - task: AzureCLI@2
+    displayName: 'Azure CLI - Remove Firewall Rule'
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: pscore
+      scriptLocation: inlineScript
+      inlineScript: | 
+        az webapp config access-restriction remove -g ${{ parameters.resourceGroup }} -n ${{ parameters.appName }} --rule-name build_server --scm-site true
